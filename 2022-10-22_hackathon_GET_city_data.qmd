@@ -1,0 +1,429 @@
+---
+title: "2022-10-22_hackathon_GET_city_data"
+author: "Joseph Edgerton - joseph.h.edgerton@gmail.com"
+institute: "University of Maryland Center for Environmental Science"
+format: html
+---
+
+EDA for GET Cities Chicago with focus on "staying in current position" 
+portion of respondents.
+
+```{r}
+#| label: download packages
+
+my_packages <- c("tidyverse",
+                 "here",
+                 "readxl",
+                 "gt",
+                 "sf",
+                 "ggrepel")
+
+install.packages(pkgs = my_packages,
+                 repos = "https://cran.r-project.org")
+
+```
+
+
+```{r}
+#| label: "load libraries"
+
+library(tidyverse)
+library(here)
+library(readxl)
+library(gt)
+library(sf)
+library(ggrepel)
+
+```
+
+#data
+
+```{r}
+#| label: Import data
+
+raw_qualitative <- read_excel(here("data",
+                                   "DataKind Qualitative Data.xlsx"))
+raw_quantitative <- read_excel(here("data",
+                                    "DataKind - Scrubbed and without Email.xlsx"))
+
+```
+
+#clean
+
+```{r}
+#| label: clean stay data
+
+clean_quantitative_stay <- raw_quantitative |> 
+  #removing this column since it appears to only be a duplicate to others
+  select(-`Zip Raw`) |> 
+  #renaming variables to make them more manageable
+  rename(
+    Gender = `How do you identify?`,
+    race_ethnicity = `Which of the following best describes you?`,
+    work_status = `Which of the following best reflects your employment situation?\n`,
+    leave_or_stay = `In the previous questions you told us you are currently in a technical role in which you use  design, science, engineering, or math on a daily basis. Which of the following applies to your current role :`
+  ) |> 
+  #new column for binning respondents that leave or stay
+  #leave has multiple options so binning them together since we are only
+  #focused on staying
+  mutate(leave_or_stay = case_when(
+    leave_or_stay == "A year from now, I plan to stay in this role" ~ 
+      "stay",
+    leave_or_stay == "I plan to exit this role in 12 months or less" ~ 
+      "exit_role",
+    leave_or_stay == "I plan to exit technology in 12 months or less" ~ 
+      "exit_tech"
+#leaving NAs alone
+#only later did I find out that they are likely the result of
+#merging two surveys together
+  )) |> 
+  #only focusing on people who stay in their current role
+  filter(leave_or_stay == "stay") |> 
+  #remove columns completely NA (probably not included in the stay survey)
+  purrr::discard(~all(is.na(.))) |> 
+  #didn't really need to do this step since there was another zipcode column
+  separate(col = `What is your ZIP code?`,
+           into = c("zipcode", "city"),
+           sep = " ")
+
+#I am getting a warning about pieces from this separate always being parsed
+#into two separate columns
+#not enough time to figure out the issue
+#(may not be cities with all zip codes?) idk
+
+#Warning: Expected 2 pieces. Additional pieces discarded in 65 rows
+```
+
+
+##demographic questions
+
+```{r}
+#| label: "demographic questions: gender"
+
+#gender
+gender_stay <- clean_quantitative_stay |> 
+  group_by(Gender) |> 
+  count() |> 
+  arrange(desc(n))
+gender_stay
+
+
+#TODO Are nonbinary, genderqueer or transgender technologists staying in their role at higher or lower rates than their cis-gender counterparts?
+
+broad_gender <- clean_quantitative_stay |> 
+  #again, more inclusive binning according to GET city slides on gender
+  #categories
+  mutate(broad_gender = case_when(
+    Gender == "Woman" ~ "Woman",
+    Gender == "Prefer not to reply" ~ "Prefer not to reply",
+    !Gender %in% c("Woman", "Prefer not to reply") ~ "Transgender, Genderqueer/Nonbinary"))
+
+#simple bar chart to see difference between women and "Transgender, Genderqueer/Nonbinary" respondents
+
+ggplot(data = broad_gender) +
+  geom_bar(aes(x = broad_gender)) +
+  ggtitle(label = "More cis-women staying in role than trans/genderqueer/non-binary respondents")
+
+```
+
+
+```{r}
+#| label: "demographic questions: race/ethnicity"
+
+#race/ethnicity
+race_ethnicity_stay <- clean_quantitative_stay |> 
+  group_by(race_ethnicity) |> 
+  count() |> 
+  arrange(desc(n))
+race_ethnicity_stay
+
+ggplot(data = race_ethnicity_stay) +
+  geom_bar(aes(x = race_ethnicity)) +
+  ggtitle(label = "")
+```
+
+```{r}
+#promotions
+
+#promotion variables:
+##`What stage are you at in your technology career?`
+##`I am pleased with the career advancement opportunities available to me.\n` 
+##`On average, how often have you been promoted in your current company?`
+##`Do you have people that you trust with relevant past experience that can help you make career decisions?`
+##`Do you have people that you trust that can help you develop a plan for getting promoted at work?`
+##`The last time you saw an increase in your compensation at work, where did it come from?`
+##`Have you ever been passed up for a promotion because you were a parent or had another family responsibility?`
+
+#didn't work, moving on to maps
+# promotions_stay <- clean_quantitative_stay |> 
+#   group_by(`On average, how often were you promoted?`) |> 
+#   count()
+
+```
+
+```{r}
+#Advancement
+#Advancement variables:
+```
+
+```{r}
+#Management
+##Management variables:
+```
+
+#maps
+
+Goal: Make some maps after EDA, map zip code, maybe get down to block groups in
+Chicago + otherplaces
+
+- Get Count and percentage
+
+Notes:
+
+ - stayers or leavers by zip code, distribution of where our group is
+
+ - divergent scale stay ---> leave, group by zip code
+
+ - add them to the folder + percentages and counts
+
+```{r}
+#| label: "load shapefiles"
+
+
+###US zip code areas (2020)###
+#data source: https://www.census.gov/cgi-bin/geo/shapefiles/index.php?year=2021&layergroup=ZIP+Code+Tabulation+Areas
+
+temp <- tempfile()
+#extract data from zipped folder
+unzip(zipfile = here("data",
+                     "tl_2021_us_zcta520.zip"), exdir = temp)
+
+US_zip_code_areas <- st_read(temp)
+
+
+###upper Illinois zip codes###
+US_zip_code_areas_IL <- US_zip_code_areas %>% 
+  #only return rows for Illinois (north part)
+  filter(str_detect(GEOID20, "^(60)"))
+
+
+
+###major US cities (visual reference)###
+#data source: https://hub.arcgis.com/datasets/esri::usa-major-cities/about
+
+temp2 <- tempfile()
+#extract data from zipped folder
+unzip(zipfile = here("data",
+                     "USA_Major_Cities.zip"), exdir = temp2)
+
+US_major_cities_all <- st_read(temp2) %>% 
+  st_transform(.,crs = st_crs(US_zip_code_areas)) %>%
+  st_filter(x = .,
+            y = US_zip_code_areas_IL) %>%
+  #just filter for a couple cities to show as reference so people know
+  #where the zip codes areas are relative to large cities
+  filter(NAME %in% c("Chicago",
+                     "Highland Park",
+                     "Elmhurst"))
+
+
+```
+
+```{r}
+#take all of Illinois zip codes and join them with respondent data
+US_zip_code_areas_IL_respondents <- US_zip_code_areas %>% 
+  #only return rows for Illinois respondents
+  filter(str_detect(GEOID20, "^(60|61|62)")) %>% 
+  #chose right join because I want all Illinois zip codes and then see the
+  #respondent zip codes
+  right_join(x = .,
+             #only looking at stay data at the moment
+             y = clean_quantitative_stay,
+             by = c("GEOID20" = "zipcode"))
+
+
+#only stay category, will need a heat map for density or any other method
+ggplot(data = US_zip_code_areas_IL_respondents) +
+  geom_sf(data = US_zip_code_areas_IL,
+          color = "black") +
+  geom_sf(aes(fill = leave_or_stay))
+  
+
+```
+
+```{r}
+#| label: "quant stay or leave for mapping"
+
+clean_quantitative_stay_or_leave <- raw_quantitative |> 
+  select(-`Zip Raw`) |> 
+  rename(
+    Gender = `How do you identify?`,
+    race_ethnicity = `Which of the following best describes you?`,
+    work_status = `Which of the following best reflects your employment situation?\n`,
+    leave_or_stay = `In the previous questions you told us you are currently in a technical role in which you use  design, science, engineering, or math on a daily basis. Which of the following applies to your current role :`
+  ) |> 
+  mutate(leave_or_stay = case_when(
+    leave_or_stay == "A year from now, I plan to stay in this role" ~ 
+      "stay",
+    leave_or_stay == "I plan to exit this role in 12 months or less" ~ 
+      "leave",
+    leave_or_stay == "I plan to exit technology in 12 months or less" ~ 
+      "leave",
+    
+    #FIXME? the line below may not reflect just the 6 people who left
+    #Correct, after further review it appears that out of 12 total NAs in the
+    #quantitative dataset for the recoded "leave_or_stay" column,
+    #6 were people had left, 6 were people who were promoted out
+    #of their current role
+    
+    #also note, other team members may have binned these 12 NAs into
+    #either 6 leave 6 stay, or in my case, 12 leave.
+    #I should have clarified earlier in the project to reach better consensus
+    
+    #technically, all of these people did leave their role, but 6 were
+    #kept within the company, as far as I know.
+    #this issue affects the maps later made, but does have a potential
+    #fix that I will comment below depending on how these answers are
+    #binned/interpreted.
+    
+    
+    #this is for people who already left
+    is.na(leave_or_stay) == TRUE ~ "leave"
+    
+    
+    #TODO if you want only the 6 respondents who actually left the 1. role and
+    # 2. company/tech (instead of the 6 who were promoted) then replace above
+    #code with these two conditions below, uncomment, and it should split 6
+    #into leave, and 6 stay
+    
+    #this is for people who already left
+    
+    # is.na(leave_or_stay) == TRUE & 
+    #   str_detect(`In the previous questions you told us you moved from a role in which you used design, science, engineering, or math on a daily basis to one in which you did not. Which of the following applies to this change?`, pattern = "exit") ~ "leave",
+    
+    #this is for people who were promoted and are still with the company?
+    #may need to investigate if promotion is just within same company or not
+    
+    # is.na(leave_or_stay) == TRUE & 
+    #   str_detect(`In the previous questions you told us you moved from a role in which you used design, science, engineering, or math on a daily basis to one in which you did not. Which of the following applies to this change?`, pattern = "promotion") ~ "stay"
+    
+  )) |> 
+  #remove columns completely NA (probably not included in the stay survey)
+  purrr::discard(~all(is.na(.))) |> 
+  separate(col = `What is your ZIP code?`,
+           into = c("zipcode", "city"),
+           sep = " ") |> 
+  #separate into each zip code, and then separate by those that leave or stay
+  group_by(zipcode, leave_or_stay) |> 
+  #get the numbers of individuals
+  summarize(n = n()) |> 
+  #get frequency and percent
+  mutate(freq = n/sum(n),
+         percent = freq*100) |> 
+  #only include the stay rows for mapping (percentages are still
+  #total respondents)
+  filter(leave_or_stay == "stay") 
+```
+
+
+```{r}
+US_zip_code_areas_IL_respondents_leave_or_stay <- US_zip_code_areas %>% 
+  #only return rows for Illinois respondents (techincally this could be
+  #just 60xxx along with 46xxx and 53xxx zip code areas, but still same
+  #result)
+  filter(str_detect(GEOID20, "^(60|61|62)")) %>% 
+  #TODO potentially could go back through and be explicit about other zipcodes
+#that were not explicitly addressed, i.e. 46312. It will be filled in, but
+#it wouldn't have a background base layer polygon
+  right_join(x = .,
+             y = clean_quantitative_stay_or_leave,
+             by = c("GEOID20" = "zipcode"))
+```
+
+
+```{r}
+#| label: "map showing stay respondent percentage per zip code"
+chicago_stay_map_percent <- ggplot(data = US_zip_code_areas_IL_respondents_leave_or_stay) +
+    #base layer is zip codes in upper Illinois (but need to go back and be
+  #explicit in including 46xxx and 53xxx zip code areas)
+  geom_sf(data = US_zip_code_areas_IL,
+          color = "black") +
+  #fill stay respondents based on percent value
+  geom_sf(aes(fill = percent)) +
+  #reference cities, only a few were selected earlier in code
+  geom_sf(data = US_major_cities_all,
+          color = "orange") +
+  #make some nice labels, but need to see through them to see data +
+  #it's hard to move the labels around, would need more code for that
+  ggrepel::geom_label_repel(
+    data = US_major_cities_all,
+    aes(label = NAME,
+        geometry = geometry),
+    alpha = 0.5,
+    stat = "sf_coordinates",
+    min.segment.length = 0
+  ) +
+  #provide color mode for legend + legend title
+  scale_fill_viridis_c(name = "% respondents\nstaying") +
+  #create plot title
+  ggtitle(label = "Where are respondents in Chicago area\nand what is the % staying in position by zip code?") +
+  #remove obnoxious plot elements
+  theme(panel.background = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        axis.title = element_blank())
+
+#save plot and specify some parameters about the output plot
+ggsave(filename = "2022-10-22_hackathin_GET_cities_chicago_map_percent.png",
+       plot = chicago_stay_map_percent,
+       path = here("output"),
+       dpi = 300,
+       bg = "white"
+       )
+```
+
+
+```{r}
+#| label: "map showing stay respondent counts per zip code"
+chicago_stay_map_individual <- ggplot(data = US_zip_code_areas_IL_respondents_leave_or_stay) +
+#base layer is zip codes in upper Illinois (but need to go back and be
+  #explicit in including 46xxx and 53xxx zip code areas)
+  geom_sf(data = US_zip_code_areas_IL,
+          color = "black") +
+  #fill stay respondents based on "n" (i.e., count) value
+  geom_sf(aes(fill = n)) +
+  #reference cities, only a few were selected earlier in code
+  geom_sf(data = US_major_cities_all,
+          color = "orange") +
+  #make some nice labels, but need to see through them to see data +
+  #it's hard to move the labels around, would need more code for that
+  ggrepel::geom_label_repel(
+    data = US_major_cities_all,
+    aes(label = NAME,
+        geometry = geometry),
+    alpha = 0.5,
+    stat = "sf_coordinates",
+    min.segment.length = 0
+  ) +
+  #provide color mode for legend + legend title
+  scale_fill_viridis_c(name = "# respondents\nstaying") +
+  #create plot title
+  ggtitle(label = "Where are respondents in Chicago area\nand what are the # staying in position by zip code?") +
+  #remove obnoxious plot elements
+  theme(panel.background = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        axis.title = element_blank())
+
+#save plot and specify some parameters about the output plot
+ggsave(filename = "2022-10-22_hackathin_GET_cities_chicago_map_individual.png",
+       plot = chicago_stay_map_individual,
+       path = here("output"),
+       dpi = 300,
+       bg = "white"
+       )
+```
+
+Most of the comments were added 2022-10-23 by Joseph Edgerton. Thank you!
